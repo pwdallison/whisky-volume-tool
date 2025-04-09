@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, unquote
 from difflib import SequenceMatcher
 
 SCRAPER_API_KEY = "c60c11ec758bf09739d6adaba094b889"
@@ -25,7 +25,7 @@ headers = {
     "Accept-Language": "en-GB,en;q=0.9"
 }
 
-def duckduckgo_search(query, site, max_links=10):
+def duckduckgo_search(query, site, max_links=15):
     try:
         q = f"site:{site} {query}"
         url = f"https://html.duckduckgo.com/html/?q={quote_plus(q)}"
@@ -35,8 +35,8 @@ def duckduckgo_search(query, site, max_links=10):
         urls = []
         for a in links[:max_links]:
             href = a.get("href")
-            if site in href:
-                urls.append(href)
+            if href and site in href:
+                urls.append(unquote(href))
         return urls
     except Exception:
         return []
@@ -105,7 +105,7 @@ def generic_scraper(url, retailer, name_selector, price_selector):
 
 if st.button("Search & Estimate"):
     results = []
-    debug_urls = []
+    debug_records = []
 
     sites = {
         "Amazon": ("amazon.co.uk", scrape_amazon),
@@ -120,23 +120,25 @@ if st.button("Search & Estimate"):
         if not config:
             continue
         site, scraper = config
-        urls = duckduckgo_search(query, site, max_links=10)
-        if urls:
-            best_match = None
-            best_score = 0
-            for url in urls:
-                scraped = scraper(url)
-                score = match_score(query, scraped.get("Name", ""))
-                if score > best_score:
-                    best_score = score
-                    best_match = scraped
-                    best_url = url
-            if best_match:
-                best_match["Match Confidence"] = f"{best_score * 100:.0f}%"
-                best_match["Est. Bottles/Month"] = estimate_volume(best_match)
-                if show_debug:
-                    best_match["Search URL"] = best_url
-                results.append(best_match)
+        urls = duckduckgo_search(query, site)
+        best_match = None
+        best_score = 0
+        fallback_scrape = None
+        for url in urls:
+            scraped = scraper(url)
+            debug_records.append({"Retailer": retailer, "URL": url, "Name": scraped.get("Name", "N/A")})
+            score = match_score(query, scraped.get("Name", ""))
+            if score > best_score:
+                best_score = score
+                best_match = scraped
+                best_url = url
+        if best_match and best_score > 0.15:
+            best_match["Retailer"] = retailer
+            best_match["Match Confidence"] = f"{best_score * 100:.0f}%"
+            best_match["Est. Bottles/Month"] = estimate_volume(best_match)
+            if show_debug:
+                best_match["Search URL"] = best_url
+            results.append(best_match)
         else:
             row = {
                 "Retailer": retailer,
@@ -151,14 +153,10 @@ if st.button("Search & Estimate"):
                 row["Search URL"] = f"https://html.duckduckgo.com/html/?q={quote_plus(f'site:{site} {query}')}"
             results.append(row)
 
-    if results:
-        df = pd.DataFrame(results)
-        st.write(df)
-        st.download_button("Download CSV", df.to_csv(index=False), "whisky_data.csv", "text/csv")
-        if show_debug:
-            st.subheader("🔍 Search URLs")
-            debug_df = df[["Retailer", "Search URL"]] if "Search URL" in df.columns else None
-            if debug_df is not None:
-                st.write(debug_df)
-    else:
-        st.error("No valid results were returned.")
+    df = pd.DataFrame(results)
+    st.write(df)
+    st.download_button("Download CSV", df.to_csv(index=False), "whisky_data.csv", "text/csv")
+
+    if show_debug and debug_records:
+        st.subheader("🔍 Raw Search Results & Parsed Names")
+        st.dataframe(pd.DataFrame(debug_records))
