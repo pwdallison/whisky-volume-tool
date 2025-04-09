@@ -25,23 +25,27 @@ headers = {
     "Accept-Language": "en-GB,en;q=0.9"
 }
 
-def duckduckgo_search(query, site):
+def duckduckgo_search(query, site, max_links=10):
     try:
         q = f"site:{site} {query}"
         url = f"https://html.duckduckgo.com/html/?q={quote_plus(q)}"
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         links = soup.select("a.result__a")
-        for a in links[:5]:
+        urls = []
+        for a in links[:max_links]:
             href = a.get("href")
             if site in href:
-                return href
-        return None
+                urls.append(href)
+        return urls
     except Exception:
-        return None
+        return []
 
 def match_score(query, name):
-    return round(SequenceMatcher(None, query.lower(), name.lower()).ratio(), 2) if query else 1
+    query_tokens = set(query.lower().split())
+    name_tokens = set(name.lower().split())
+    intersection = query_tokens.intersection(name_tokens)
+    return round(len(intersection) / len(query_tokens), 2) if query_tokens else 1
 
 def estimate_volume(row):
     reviews = row["Reviews"] if isinstance(row["Reviews"], int) else 0
@@ -101,6 +105,7 @@ def generic_scraper(url, retailer, name_selector, price_selector):
 
 if st.button("Search & Estimate"):
     results = []
+    debug_urls = []
 
     sites = {
         "Amazon": ("amazon.co.uk", scrape_amazon),
@@ -115,14 +120,23 @@ if st.button("Search & Estimate"):
         if not config:
             continue
         site, scraper = config
-        url = duckduckgo_search(query, site)
-        if url:
-            data = scraper(url)
-            data["Match Confidence"] = f"{match_score(query, data['Name']) * 100:.0f}%"
-            data["Est. Bottles/Month"] = estimate_volume(data)
-            if show_debug:
-                data["Search URL"] = url
-            results.append(data)
+        urls = duckduckgo_search(query, site, max_links=10)
+        if urls:
+            best_match = None
+            best_score = 0
+            for url in urls:
+                scraped = scraper(url)
+                score = match_score(query, scraped.get("Name", ""))
+                if score > best_score:
+                    best_score = score
+                    best_match = scraped
+                    best_url = url
+            if best_match:
+                best_match["Match Confidence"] = f"{best_score * 100:.0f}%"
+                best_match["Est. Bottles/Month"] = estimate_volume(best_match)
+                if show_debug:
+                    best_match["Search URL"] = best_url
+                results.append(best_match)
         else:
             row = {
                 "Retailer": retailer,
@@ -142,8 +156,9 @@ if st.button("Search & Estimate"):
         st.write(df)
         st.download_button("Download CSV", df.to_csv(index=False), "whisky_data.csv", "text/csv")
         if show_debug:
-            for row in results:
-                if "Search URL" in row:
-                    st.write(f"🔗 {row['Retailer']} search: {row['Search URL']}")
+            st.subheader("🔍 Search URLs")
+            debug_df = df[["Retailer", "Search URL"]] if "Search URL" in df.columns else None
+            if debug_df is not None:
+                st.write(debug_df)
     else:
         st.error("No valid results were returned.")
