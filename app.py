@@ -8,10 +8,15 @@ from difflib import SequenceMatcher
 
 SCRAPER_API_KEY = "c60c11ec758bf09739d6adaba094b889"
 
-st.title("🥃 Multi-Retailer Whisky Volume Estimator & Trending Tracker")
+st.set_page_config(page_title="Whisky Retail Data Scraper", layout="wide")
+st.title("🥃 Whisky Retail Data & Volume Estimator")
 
-query = st.text_input("Enter a whisky brand or product name (or leave blank to find top trending):")
+query = st.text_input("Enter a whisky brand or product name (leave blank for trending):")
 include_twe = st.checkbox("Include The Whisky Exchange (via ScraperAPI)", value=True)
+include_ocado = st.checkbox("Include Ocado", value=True)
+include_tesco = st.checkbox("Include Tesco", value=True)
+include_waitrose = st.checkbox("Include Waitrose", value=True)
+include_sainsburys = st.checkbox("Include Sainsbury's", value=True)
 show_debug = st.checkbox("Show debug info")
 
 headers = {
@@ -19,6 +24,7 @@ headers = {
     "Accept-Language": "en-GB,en;q=0.9"
 }
 
+# --- UTILS ---
 def google_search(query, site):
     search_url = f"https://www.google.com/search?q=site:{site}+{quote_plus(query)}"
     try:
@@ -28,6 +34,16 @@ def google_search(query, site):
     except Exception:
         return None
 
+def match_score(query, name):
+    return round(SequenceMatcher(None, query.lower(), name.lower()).ratio(), 2) if query else 1
+
+def estimate_volume(row):
+    reviews = row["Reviews"] if isinstance(row["Reviews"], int) else 0
+    score = match_score(query, row["Name"])
+    retailer_weight = 1 if row.get("Availability") == "In Stock" else 0.5
+    return int(reviews * 25 * score * retailer_weight)
+
+# --- SCRAPERS ---
 def scrape_amazon(url):
     try:
         r = requests.get(url, headers=headers, timeout=10)
@@ -62,15 +78,55 @@ def scrape_twe(url):
     except Exception as e:
         return {"Retailer": "TWE", "Name": "Error", "Error": str(e)}
 
-def match_score(query, name):
-    return round(SequenceMatcher(None, query.lower(), name.lower()).ratio(), 2) if query else 1
+def scrape_ocado(url):
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        title = soup.find("h1")
+        price = soup.select_one("span.fop-price")
+        return {
+            "Retailer": "Ocado",
+            "Name": title.text.strip() if title else "N/A",
+            "Price": price.text.strip() if price else "N/A",
+            "Reviews": "N/A",
+            "Availability": "In Stock" if price else "Unavailable"
+        }
+    except Exception as e:
+        return {"Retailer": "Ocado", "Name": "Error", "Error": str(e)}
 
-def estimate_volume(row):
-    reviews = row["Reviews"] if isinstance(row["Reviews"], int) else 0
-    score = match_score(query, row["Name"])
-    retailer_weight = 1 if row.get("Availability") == "In Stock" else 0.5
-    return int(reviews * 25 * score * retailer_weight)
+def scrape_waitrose(url):
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        title = soup.find("h1")
+        price = soup.select_one("span.linePrice")
+        return {
+            "Retailer": "Waitrose",
+            "Name": title.text.strip() if title else "N/A",
+            "Price": price.text.strip() if price else "N/A",
+            "Reviews": "N/A",
+            "Availability": "In Stock" if price else "Unavailable"
+        }
+    except Exception as e:
+        return {"Retailer": "Waitrose", "Name": "Error", "Error": str(e)}
 
+def scrape_sainsburys(url):
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        title = soup.find("h1")
+        price = soup.select_one("span.pd__cost")
+        return {
+            "Retailer": "Sainsbury's",
+            "Name": title.text.strip() if title else "N/A",
+            "Price": price.text.strip() if price else "N/A",
+            "Reviews": "N/A",
+            "Availability": "In Stock" if price else "Unavailable"
+        }
+    except Exception as e:
+        return {"Retailer": "Sainsbury's", "Name": "Error", "Error": str(e)}
+
+# --- TRENDING ---
 def get_top_amazon_whiskies():
     try:
         api_url = (
@@ -83,11 +139,7 @@ def get_top_amazon_whiskies():
         items = soup.select("div.zg-grid-general-faceout, div.zg-item-immersion")
         top = []
         for item in items[:30]:
-            name = (
-                item.select_one(".p13n-sc-truncate-desktop-type2") or
-                item.select_one("._cDEzb_p13n-sc-css-line-clamp-1_1Fn1y") or
-                item.select_one("div.zg-text-center-align a.a-link-normal")
-            )
+            name = item.select_one(".p13n-sc-truncate-desktop-type2") or item.select_one("._cDEzb_p13n-sc-css-line-clamp-1_1Fn1y")
             reviews = item.select_one(".a-size-small")
             review_count = int(re.sub(r"[^\d]", "", reviews.text)) if reviews else 0
             top.append({
@@ -99,19 +151,11 @@ def get_top_amazon_whiskies():
                 "Match Confidence": "-",
                 "Est. Bottles/Month": review_count * 25
             })
-        return top if top else [{
-            "Retailer": "Amazon",
-            "Name": "⚠️ No trending whiskies parsed",
-            "Reviews": "-",
-            "Price": "-",
-            "Availability": "-",
-            "Match Confidence": "-",
-            "Est. Bottles/Month": 0
-        }]
+        return top
     except Exception as e:
         return [{
             "Retailer": "Amazon",
-            "Name": f"❌ Error: {e}",
+            "Name": f"Error: {e}",
             "Reviews": "-",
             "Price": "-",
             "Availability": "-",
@@ -119,6 +163,7 @@ def get_top_amazon_whiskies():
             "Est. Bottles/Month": 0
         }]
 
+# --- MAIN ---
 if st.button("Search & Estimate"):
     results = []
 
@@ -132,7 +177,11 @@ if st.button("Search & Estimate"):
 
     sites = {
         "Amazon": ("amazon.co.uk", scrape_amazon),
-        "The Whisky Exchange": ("thewhiskyexchange.com", scrape_twe) if include_twe else None
+        "The Whisky Exchange": ("thewhiskyexchange.com", scrape_twe) if include_twe else None,
+        "Ocado": ("ocado.com", scrape_ocado) if include_ocado else None,
+        "Tesco": ("tesco.com", scrape_waitrose) if include_tesco else None,
+        "Waitrose": ("waitrose.com", scrape_waitrose) if include_waitrose else None,
+        "Sainsbury's": ("sainsburys.co.uk", scrape_sainsburys) if include_sainsburys else None
     }
 
     for retailer, config in sites.items():
