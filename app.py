@@ -32,7 +32,7 @@ def duckduckgo_search(query, site):
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
         links = soup.select("a.result__a")
-        for a in links:
+        for a in links[:5]:
             href = a.get("href")
             if site in href:
                 return href
@@ -99,44 +99,8 @@ def generic_scraper(url, retailer, name_selector, price_selector):
     except Exception as e:
         return {"Retailer": retailer, "Name": "Error", "Error": str(e)}
 
-def get_top_amazon_whiskies():
-    try:
-        api_url = (
-            f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}"
-            "&url=https://www.amazon.co.uk/Best-Sellers-Grocery-Whisky/zgbs/grocery/359013031"
-            "&render=true"
-        )
-        r = requests.get(api_url, headers=headers, timeout=20)
-        soup = BeautifulSoup(r.text, "html.parser")
-        items = soup.select("div.zg-grid-general-faceout, div.zg-item-immersion")
-        top = []
-        for item in items[:30]:
-            name = item.select_one(".p13n-sc-truncate-desktop-type2") or item.select_one("._cDEzb_p13n-sc-css-line-clamp-1_1Fn1y")
-            reviews = item.select_one(".a-size-small")
-            review_count = int(re.sub(r"[^\d]", "", reviews.text)) if reviews else 0
-            top.append({
-                "Retailer": "Amazon",
-                "Name": name.text.strip() if name else "N/A",
-                "Reviews": review_count,
-                "Price": "-",
-                "Availability": "Top Seller",
-                "Match Confidence": "-",
-                "Est. Bottles/Month": review_count * 25
-            })
-        return top
-    except Exception as e:
-        return [{"Retailer": "Amazon", "Name": f"Error: {e}", "Reviews": "-", "Price": "-", "Availability": "-", "Match Confidence": "-", "Est. Bottles/Month": 0}]
-
 if st.button("Search & Estimate"):
     results = []
-
-    if not query:
-        st.subheader("📈 Top Trending Whiskies")
-        results.extend(get_top_amazon_whiskies())
-        df = pd.DataFrame(results)
-        st.write(df)
-        st.download_button("Download CSV", df.to_csv(index=False), "trending_whiskies.csv", "text/csv")
-        st.stop()
 
     sites = {
         "Amazon": ("amazon.co.uk", scrape_amazon),
@@ -156,9 +120,11 @@ if st.button("Search & Estimate"):
             data = scraper(url)
             data["Match Confidence"] = f"{match_score(query, data['Name']) * 100:.0f}%"
             data["Est. Bottles/Month"] = estimate_volume(data)
+            if show_debug:
+                data["Search URL"] = url
             results.append(data)
         else:
-            results.append({
+            row = {
                 "Retailer": retailer,
                 "Name": "No match found",
                 "Price": "-",
@@ -166,7 +132,10 @@ if st.button("Search & Estimate"):
                 "Availability": "-",
                 "Match Confidence": "0%",
                 "Est. Bottles/Month": 0
-            })
+            }
+            if show_debug:
+                row["Search URL"] = f"https://html.duckduckgo.com/html/?q={quote_plus(f'site:{site} {query}')}"
+            results.append(row)
 
     if results:
         df = pd.DataFrame(results)
@@ -174,6 +143,7 @@ if st.button("Search & Estimate"):
         st.download_button("Download CSV", df.to_csv(index=False), "whisky_data.csv", "text/csv")
         if show_debug:
             for row in results:
-                st.write(f"🔍 {row['Retailer']} → {row.get('Name')}")
+                if "Search URL" in row:
+                    st.write(f"🔗 {row['Retailer']} search: {row['Search URL']}")
     else:
         st.error("No valid results were returned.")
