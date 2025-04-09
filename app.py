@@ -72,9 +72,13 @@ def estimate_volume(row):
     return int(reviews * 25 * score * retailer_weight)
 
 def get_top_amazon_whiskies():
-    url = "https://www.amazon.co.uk/Best-Sellers-Grocery-Whisky/zgbs/grocery/359013031"
     try:
-        r = requests.get(url, headers=headers, timeout=10)
+        api_url = (
+            f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}"
+            "&url=https://www.amazon.co.uk/Best-Sellers-Grocery-Whisky/zgbs/grocery/359013031"
+            "&render=true"
+        )
+        r = requests.get(api_url, headers=headers, timeout=20)
         soup = BeautifulSoup(r.text, "html.parser")
         items = soup.select("div.zg-grid-general-faceout, div.zg-item-immersion")
         top = []
