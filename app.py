@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -20,17 +21,22 @@ include_sainsburys = st.checkbox("Include Sainsbury's", value=True)
 show_debug = st.checkbox("Show debug info")
 
 headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.117 Safari/537.36",
+    "User-Agent": "Mozilla/5.0",
     "Accept-Language": "en-GB,en;q=0.9"
 }
 
-# --- UTILS ---
-def google_search(query, site):
-    search_url = f"https://www.google.com/search?q=site:{site}+{quote_plus(query)}"
+def duckduckgo_search(query, site):
     try:
-        resp = requests.get(search_url, headers=headers, timeout=10)
-        urls = re.findall(r"https://www\." + site.replace(".", r"\.") + r"[^\s\"']+", resp.text)
-        return urls[0] if urls else None
+        q = f"site:{site} {query}"
+        url = f"https://html.duckduckgo.com/html/?q={quote_plus(q)}"
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        links = soup.select("a.result__a")
+        for a in links:
+            href = a.get("href")
+            if site in href:
+                return href
+        return None
     except Exception:
         return None
 
@@ -43,7 +49,6 @@ def estimate_volume(row):
     retailer_weight = 1 if row.get("Availability") == "In Stock" else 0.5
     return int(reviews * 25 * score * retailer_weight)
 
-# --- SCRAPERS ---
 def scrape_amazon(url):
     try:
         r = requests.get(url, headers=headers, timeout=10)
@@ -78,55 +83,22 @@ def scrape_twe(url):
     except Exception as e:
         return {"Retailer": "TWE", "Name": "Error", "Error": str(e)}
 
-def scrape_ocado(url):
+def generic_scraper(url, retailer, name_selector, price_selector):
     try:
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        title = soup.find("h1")
-        price = soup.select_one("span.fop-price")
+        title = soup.select_one(name_selector)
+        price = soup.select_one(price_selector)
         return {
-            "Retailer": "Ocado",
+            "Retailer": retailer,
             "Name": title.text.strip() if title else "N/A",
             "Price": price.text.strip() if price else "N/A",
             "Reviews": "N/A",
             "Availability": "In Stock" if price else "Unavailable"
         }
     except Exception as e:
-        return {"Retailer": "Ocado", "Name": "Error", "Error": str(e)}
+        return {"Retailer": retailer, "Name": "Error", "Error": str(e)}
 
-def scrape_waitrose(url):
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        title = soup.find("h1")
-        price = soup.select_one("span.linePrice")
-        return {
-            "Retailer": "Waitrose",
-            "Name": title.text.strip() if title else "N/A",
-            "Price": price.text.strip() if price else "N/A",
-            "Reviews": "N/A",
-            "Availability": "In Stock" if price else "Unavailable"
-        }
-    except Exception as e:
-        return {"Retailer": "Waitrose", "Name": "Error", "Error": str(e)}
-
-def scrape_sainsburys(url):
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        title = soup.find("h1")
-        price = soup.select_one("span.pd__cost")
-        return {
-            "Retailer": "Sainsbury's",
-            "Name": title.text.strip() if title else "N/A",
-            "Price": price.text.strip() if price else "N/A",
-            "Reviews": "N/A",
-            "Availability": "In Stock" if price else "Unavailable"
-        }
-    except Exception as e:
-        return {"Retailer": "Sainsbury's", "Name": "Error", "Error": str(e)}
-
-# --- TRENDING ---
 def get_top_amazon_whiskies():
     try:
         api_url = (
@@ -153,17 +125,8 @@ def get_top_amazon_whiskies():
             })
         return top
     except Exception as e:
-        return [{
-            "Retailer": "Amazon",
-            "Name": f"Error: {e}",
-            "Reviews": "-",
-            "Price": "-",
-            "Availability": "-",
-            "Match Confidence": "-",
-            "Est. Bottles/Month": 0
-        }]
+        return [{"Retailer": "Amazon", "Name": f"Error: {e}", "Reviews": "-", "Price": "-", "Availability": "-", "Match Confidence": "-", "Est. Bottles/Month": 0}]
 
-# --- MAIN ---
 if st.button("Search & Estimate"):
     results = []
 
@@ -178,17 +141,17 @@ if st.button("Search & Estimate"):
     sites = {
         "Amazon": ("amazon.co.uk", scrape_amazon),
         "The Whisky Exchange": ("thewhiskyexchange.com", scrape_twe) if include_twe else None,
-        "Ocado": ("ocado.com", scrape_ocado) if include_ocado else None,
-        "Tesco": ("tesco.com", scrape_waitrose) if include_tesco else None,
-        "Waitrose": ("waitrose.com", scrape_waitrose) if include_waitrose else None,
-        "Sainsbury's": ("sainsburys.co.uk", scrape_sainsburys) if include_sainsburys else None
+        "Ocado": ("ocado.com", lambda url: generic_scraper(url, "Ocado", "h1", "span.fop-price")) if include_ocado else None,
+        "Tesco": ("tesco.com", lambda url: generic_scraper(url, "Tesco", "h1", ".price")) if include_tesco else None,
+        "Waitrose": ("waitrose.com", lambda url: generic_scraper(url, "Waitrose", "h1", "span.linePrice")) if include_waitrose else None,
+        "Sainsbury's": ("sainsburys.co.uk", lambda url: generic_scraper(url, "Sainsbury's", "h1", "span.pd__cost")) if include_sainsburys else None
     }
 
     for retailer, config in sites.items():
         if not config:
             continue
         site, scraper = config
-        url = google_search(query, site)
+        url = duckduckgo_search(query, site)
         if url:
             data = scraper(url)
             data["Match Confidence"] = f"{match_score(query, data['Name']) * 100:.0f}%"
