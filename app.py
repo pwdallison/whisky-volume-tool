@@ -4,9 +4,10 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
-from urllib.parse import quote_plus, unquote
+from urllib.parse import quote_plus
 from difflib import SequenceMatcher
 
+SERP_API_KEY = "10afbab3ff5f62cec3bc85b04e7883233db7908e3b08da942f0773fb37c7c269"
 SCRAPER_API_KEY = "c60c11ec758bf09739d6adaba094b889"
 
 st.set_page_config(page_title="Whisky Retail Data Scraper", layout="wide")
@@ -25,20 +26,24 @@ headers = {
     "Accept-Language": "en-GB,en;q=0.9"
 }
 
-def duckduckgo_search(query, site, max_links=15):
+def serpapi_search(query, site, max_results=10):
+    url = "https://serpapi.com/search.json"
+    params = {
+        "q": f"site:{site} {query}",
+        "api_key": SERP_API_KEY,
+        "num": max_results,
+        "engine": "google"
+    }
     try:
-        q = f"site:{site} {query}"
-        url = f"https://html.duckduckgo.com/html/?q={quote_plus(q)}"
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        links = soup.select("a.result__a")
+        response = requests.get(url, params=params, timeout=15)
+        data = response.json()
         urls = []
-        for a in links[:max_links]:
-            href = a.get("href")
-            if href and site in href:
-                urls.append(unquote(href))
+        for result in data.get("organic_results", []):
+            link = result.get("link", "")
+            if site in link:
+                urls.append(link)
         return urls
-    except Exception:
+    except Exception as e:
         return []
 
 def match_score(query, name):
@@ -120,10 +125,9 @@ if st.button("Search & Estimate"):
         if not config:
             continue
         site, scraper = config
-        urls = duckduckgo_search(query, site)
+        urls = serpapi_search(query, site)
         best_match = None
         best_score = 0
-        fallback_scrape = None
         for url in urls:
             scraped = scraper(url)
             debug_records.append({"Retailer": retailer, "URL": url, "Name": scraped.get("Name", "N/A")})
@@ -150,7 +154,7 @@ if st.button("Search & Estimate"):
                 "Est. Bottles/Month": 0
             }
             if show_debug:
-                row["Search URL"] = f"https://html.duckduckgo.com/html/?q={quote_plus(f'site:{site} {query}')}"
+                row["Search URL"] = f"https://serpapi.com/search?q=site:{site}+{quote_plus(query)}"
             results.append(row)
 
     df = pd.DataFrame(results)
