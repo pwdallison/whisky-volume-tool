@@ -8,9 +8,9 @@ from difflib import SequenceMatcher
 
 SCRAPER_API_KEY = "c60c11ec758bf09739d6adaba094b889"
 
-st.title("🥃 Multi-Retailer Whisky Volume Estimator")
+st.title("🥃 Multi-Retailer Whisky Volume Estimator & Trending Tracker")
 
-query = st.text_input("Enter a whisky brand or product name:")
+query = st.text_input("Enter a whisky brand or product name (or leave blank to find top trending):")
 include_twe = st.checkbox("Include The Whisky Exchange (via ScraperAPI)")
 show_debug = st.checkbox("Show debug info")
 
@@ -24,20 +24,26 @@ def google_search(query, site):
     except Exception:
         return None
 
-def scrape_site(url, selectors, retailer):
+def scrape_amazon(url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.117 Safari/537.36",
+        "Accept-Language": "en-GB,en;q=0.9"
+    }
     try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        data = {"Retailer": retailer}
-        for key, selector in selectors.items():
-            if callable(selector):
-                data[key] = selector(soup)
-            else:
-                el = soup.select_one(selector)
-                data[key] = el.text.strip() if el else "N/A"
-        return data
+        title = soup.find(id="productTitle")
+        price_block = soup.select_one(".a-price .a-offscreen")
+        reviews = soup.select_one("#acrCustomerReviewText")
+        return {
+            "Retailer": "Amazon",
+            "Name": title.text.strip() if title else "N/A",
+            "Price": price_block.text.strip() if price_block else "N/A",
+            "Reviews": int(re.sub(r"[^\d]", "", reviews.text)) if reviews else 0,
+            "Availability": "In Stock" if price_block else "Unavailable"
+        }
     except Exception as e:
-        return {"Retailer": retailer, "Name": "Error", "Error": str(e)}
+        return {"Retailer": "Amazon", "Name": "Error", "Error": str(e)}
 
 def scrape_twe(url):
     try:
@@ -56,12 +62,8 @@ def scrape_twe(url):
     except Exception as e:
         return {"Retailer": "TWE", "Name": "Error", "Error": str(e)}
 
-def extract_reviews_amazon(soup):
-    reviews = soup.find(id="acrCustomerReviewText")
-    return int(re.sub(r"[^\d]", "", reviews.text)) if reviews else 0
-
 def match_score(query, name):
-    return round(SequenceMatcher(None, query.lower(), name.lower()).ratio(), 2)
+    return round(SequenceMatcher(None, query.lower(), name.lower()).ratio(), 2) if query else 1
 
 def estimate_volume(row):
     reviews = row["Reviews"] if isinstance(row["Reviews"], int) else 0
@@ -69,81 +71,68 @@ def estimate_volume(row):
     retailer_weight = 1 if row.get("Availability") == "In Stock" else 0.5
     return int(reviews * 25 * score * retailer_weight)
 
+def get_top_amazon_whiskies():
+    url = "https://www.amazon.co.uk/Best-Sellers-Grocery-Whisky/zgbs/grocery/359013031"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, timeout=10)
+    soup = BeautifulSoup(r.text, "html.parser")
+    items = soup.select(".zg-grid-general-faceout")
+    top = []
+    for item in items[:30]:
+        name = item.select_one(".p13n-sc-truncate") or item.select_one(".zg-text-center-align")
+        reviews = item.select_one(".a-size-small")
+        top.append({
+            "Retailer": "Amazon",
+            "Name": name.text.strip() if name else "N/A",
+            "Reviews": int(re.sub(r"[^\d]", "", reviews.text)) if reviews else 0,
+            "Price": "-",
+            "Availability": "Top Seller",
+            "Match Confidence": "-",
+            "Est. Bottles/Month": int(re.sub(r"[^\d]", "", reviews.text)) * 25 if reviews else 0
+        })
+    return top
+
 if st.button("Search & Estimate"):
+    results = []
+
     if not query:
-        st.warning("Please enter a product name.")
+        st.subheader("📈 Top Trending Whiskies")
+        results.extend(get_top_amazon_whiskies())
+        df = pd.DataFrame(results)
+        st.write(df)
+        st.download_button("Download CSV", df.to_csv(index=False), "trending_whiskies.csv", "text/csv")
         st.stop()
 
     sites = {
-        "Amazon": ("amazon.co.uk", {
-            "Name": "#productTitle",
-            "Price": "span.a-price .a-price-whole",
-            "Reviews": extract_reviews_amazon,
-            "Availability": lambda soup: "In Stock" if soup.select_one("#productTitle") else "Unavailable"
-        }),
-        "Waitrose": ("waitrose.com", {
-            "Name": "h1",
-            "Price": "span.linePrice",
-            "Reviews": lambda soup: "N/A",
-            "Availability": lambda soup: "In Stock" if soup.select_one("span.linePrice") else "Unavailable"
-        }),
-        "Ocado": ("ocado.com", {
-            "Name": "h1",
-            "Price": "span.fop-price",
-            "Reviews": lambda soup: "N/A",
-            "Availability": lambda soup: "In Stock" if soup.select_one("span.fop-price") else "Unavailable"
-        }),
-        "Tesco": ("tesco.com", {
-            "Name": "h1",
-            "Price": "span.value",
-            "Reviews": lambda soup: "N/A",
-            "Availability": lambda soup: "In Stock" if soup.select_one("span.value") else "Unavailable"
-        }),
-        "Sainsbury's": ("sainsburys.co.uk", {
-            "Name": "h1",
-            "Price": "span.pd__cost",
-            "Reviews": lambda soup: "N/A",
-            "Availability": lambda soup: "In Stock" if soup.select_one("span.pd__cost") else "Unavailable"
-        })
+        "Amazon": ("amazon.co.uk", scrape_amazon),
+        "The Whisky Exchange": ("thewhiskyexchange.com", scrape_twe) if include_twe else None
     }
 
-    if include_twe:
-        sites["The Whisky Exchange"] = ("thewhiskyexchange.com", scrape_twe)
-
-    results = []
-
     for retailer, config in sites.items():
-        site, selectors = config
-        if callable(selectors):
-            url = google_search(query, site)
-            if url:
-                data = selectors(url)
-                data["Match Confidence"] = f"{match_score(query, data['Name']) * 100:.0f}%"
-                data["Est. Bottles/Month"] = estimate_volume(data)
-                results.append(data)
-            else:
-                results.append({
-                    "Retailer": retailer, "Name": "No match found", "Price": "-", "Reviews": "-",
-                    "Availability": "-", "Match Confidence": "0%", "Est. Bottles/Month": 0
-                })
+        if not config:
+            continue
+        site, scraper = config
+        url = google_search(query, site)
+        if url:
+            data = scraper(url)
+            data["Match Confidence"] = f"{match_score(query, data['Name']) * 100:.0f}%"
+            data["Est. Bottles/Month"] = estimate_volume(data)
+            results.append(data)
         else:
-            url = google_search(query, site)
-            if url:
-                data = scrape_site(url, selectors, retailer)
-                data["Match Confidence"] = f"{match_score(query, data['Name']) * 100:.0f}%"
-                data["Est. Bottles/Month"] = estimate_volume(data)
-                results.append(data)
-            else:
-                results.append({
-                    "Retailer": retailer, "Name": "No match found", "Price": "-", "Reviews": "-",
-                    "Availability": "-", "Match Confidence": "0%", "Est. Bottles/Month": 0
-                })
+            results.append({
+                "Retailer": retailer,
+                "Name": "No match found",
+                "Price": "-",
+                "Reviews": "-",
+                "Availability": "-",
+                "Match Confidence": "0%",
+                "Est. Bottles/Month": 0
+            })
 
     if results:
         df = pd.DataFrame(results)
         st.write(df)
         st.download_button("Download CSV", df.to_csv(index=False), "whisky_data.csv", "text/csv")
-
         if show_debug:
             for row in results:
                 st.write(f"🔍 {row['Retailer']} → {row.get('Name')}")
