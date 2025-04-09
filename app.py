@@ -14,8 +14,12 @@ query = st.text_input("Enter a whisky brand or product name (or leave blank to f
 include_twe = st.checkbox("Include The Whisky Exchange (via ScraperAPI)")
 show_debug = st.checkbox("Show debug info")
 
+headers = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.117 Safari/537.36",
+    "Accept-Language": "en-GB,en;q=0.9"
+}
+
 def google_search(query, site):
-    headers = {"User-Agent": "Mozilla/5.0"}
     search_url = f"https://www.google.com/search?q=site:{site}+{quote_plus(query)}"
     try:
         resp = requests.get(search_url, headers=headers, timeout=10)
@@ -25,10 +29,6 @@ def google_search(query, site):
         return None
 
 def scrape_amazon(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.117 Safari/537.36",
-        "Accept-Language": "en-GB,en;q=0.9"
-    }
     try:
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
@@ -73,24 +73,30 @@ def estimate_volume(row):
 
 def get_top_amazon_whiskies():
     url = "https://www.amazon.co.uk/Best-Sellers-Grocery-Whisky/zgbs/grocery/359013031"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers, timeout=10)
-    soup = BeautifulSoup(r.text, "html.parser")
-    items = soup.select(".zg-grid-general-faceout")
-    top = []
-    for item in items[:30]:
-        name = item.select_one(".p13n-sc-truncate") or item.select_one(".zg-text-center-align")
-        reviews = item.select_one(".a-size-small")
-        top.append({
-            "Retailer": "Amazon",
-            "Name": name.text.strip() if name else "N/A",
-            "Reviews": int(re.sub(r"[^\d]", "", reviews.text)) if reviews else 0,
-            "Price": "-",
-            "Availability": "Top Seller",
-            "Match Confidence": "-",
-            "Est. Bottles/Month": int(re.sub(r"[^\d]", "", reviews.text)) * 25 if reviews else 0
-        })
-    return top
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
+        items = soup.select("div.p13n-sc-uncoverable-faceout") or soup.select(".zg-grid-general-faceout")
+        top = []
+        for item in items[:30]:
+            name = item.select_one(".p13n-sc-truncate-desktop-type2") or item.select_one("._cDEzb_p13n-sc-css-line-clamp-1_1Fn1y")
+            reviews = item.select_one(".a-size-small")
+            top.append({
+                "Retailer": "Amazon",
+                "Name": name.text.strip() if name else "N/A",
+                "Reviews": int(re.sub(r"[^\d]", "", reviews.text)) if reviews else 0,
+                "Price": "-",
+                "Availability": "Top Seller",
+                "Match Confidence": "-",
+                "Est. Bottles/Month": int(re.sub(r"[^\d]", "", reviews.text)) * 25 if reviews else 0
+            })
+        return top if top else [{
+            "Retailer": "Amazon", "Name": "No trending whiskies found", "Reviews": "-", "Price": "-", "Availability": "-", "Match Confidence": "-", "Est. Bottles/Month": 0
+        }]
+    except Exception as e:
+        return [{
+            "Retailer": "Amazon", "Name": f"Error: {e}", "Reviews": "-", "Price": "-", "Availability": "-", "Match Confidence": "-", "Est. Bottles/Month": 0
+        }]
 
 if st.button("Search & Estimate"):
     results = []
