@@ -11,7 +11,7 @@ SCRAPER_API_KEY = "c60c11ec758bf09739d6adaba094b889"
 st.title("🥃 Multi-Retailer Whisky Volume Estimator & Trending Tracker")
 
 query = st.text_input("Enter a whisky brand or product name (or leave blank to find top trending):")
-include_twe = st.checkbox("Include The Whisky Exchange (via ScraperAPI)")
+include_twe = st.checkbox("Include The Whisky Exchange (via ScraperAPI)", value=True)
 show_debug = st.checkbox("Show debug info")
 
 headers = {
@@ -76,26 +76,43 @@ def get_top_amazon_whiskies():
     try:
         r = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, "html.parser")
-        items = soup.select("div.p13n-sc-uncoverable-faceout") or soup.select(".zg-grid-general-faceout")
+        items = soup.select("div.zg-grid-general-faceout, div.zg-item-immersion")
         top = []
         for item in items[:30]:
-            name = item.select_one(".p13n-sc-truncate-desktop-type2") or item.select_one("._cDEzb_p13n-sc-css-line-clamp-1_1Fn1y")
+            name = (
+                item.select_one(".p13n-sc-truncate-desktop-type2") or
+                item.select_one("._cDEzb_p13n-sc-css-line-clamp-1_1Fn1y") or
+                item.select_one("div.zg-text-center-align a.a-link-normal")
+            )
             reviews = item.select_one(".a-size-small")
+            review_count = int(re.sub(r"[^\d]", "", reviews.text)) if reviews else 0
             top.append({
                 "Retailer": "Amazon",
                 "Name": name.text.strip() if name else "N/A",
-                "Reviews": int(re.sub(r"[^\d]", "", reviews.text)) if reviews else 0,
+                "Reviews": review_count,
                 "Price": "-",
                 "Availability": "Top Seller",
                 "Match Confidence": "-",
-                "Est. Bottles/Month": int(re.sub(r"[^\d]", "", reviews.text)) * 25 if reviews else 0
+                "Est. Bottles/Month": review_count * 25
             })
         return top if top else [{
-            "Retailer": "Amazon", "Name": "No trending whiskies found", "Reviews": "-", "Price": "-", "Availability": "-", "Match Confidence": "-", "Est. Bottles/Month": 0
+            "Retailer": "Amazon",
+            "Name": "⚠️ No trending whiskies parsed",
+            "Reviews": "-",
+            "Price": "-",
+            "Availability": "-",
+            "Match Confidence": "-",
+            "Est. Bottles/Month": 0
         }]
     except Exception as e:
         return [{
-            "Retailer": "Amazon", "Name": f"Error: {e}", "Reviews": "-", "Price": "-", "Availability": "-", "Match Confidence": "-", "Est. Bottles/Month": 0
+            "Retailer": "Amazon",
+            "Name": f"❌ Error: {e}",
+            "Reviews": "-",
+            "Price": "-",
+            "Availability": "-",
+            "Match Confidence": "-",
+            "Est. Bottles/Month": 0
         }]
 
 if st.button("Search & Estimate"):
